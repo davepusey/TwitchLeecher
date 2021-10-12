@@ -64,6 +64,7 @@
     <Compile Include="Services\ProcessingService.cs" />
     <Compile Include="Services\RuntimeDataService.cs" />
     <Compile Include="Services\PreferencesService.cs" />
+    <Compile Include="Services\TwitchGQL.cs" />
     <Compile Include="Services\TwitchService.cs" />
     <Compile Include="Services\UpdateService.cs" />
   </ItemGroup>
