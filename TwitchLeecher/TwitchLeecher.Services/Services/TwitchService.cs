@@ -508,7 +508,9 @@ namespace TwitchLeecher.Services.Services
                             "game{name,boxArtURL(width:136,height:190)}, " +
                             "viewCount, lengthSeconds, " +
                             "thumbnailURLs(width:640,height:360), " +
-                            "publishedAt, createdAt, animatedPreviewURL, broadcastType}";
+                            "publishedAt, createdAt, animatedPreviewURL, broadcastType, " +
+                            "playbackAccessToken(params:{disableHTTPS:false,hasAdblock:false,platform:\"\",playerBackend:null,playerType:\"\"}){value}" +
+                            "}";
 
             JObject videoJson = TwitchGQL.RunQuery(query);
 
@@ -522,20 +524,9 @@ namespace TwitchLeecher.Services.Services
             }
         }
 
-        private bool IsVideoSubOnly(int id)
+        private bool IsVideoSubOnly(string playbackAccessTokenValue)
         {
-            JObject variables = new JObject
-            {
-                { "isLive", false },
-                { "login", "" },
-                { "isVod", true },
-                { "vodID", id.ToString() },
-                { "playerType", "" }
-            };
-
-            JObject patJson = TwitchGQL.RunPersistedQuery("PlaybackAccessToken", variables, "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712");
-            JObject tokenJson = JObject.Parse(patJson.SelectToken("data.videoPlaybackAccessToken.value").Value<string>());
-            JArray bitratesJson = tokenJson.SelectToken("chansub.restricted_bitrates").Value<JArray>();
+            JArray bitratesJson = JObject.Parse(playbackAccessTokenValue).SelectToken("chansub.restricted_bitrates").Value<JArray>();
 
             return bitratesJson.Count > 0;
         }
@@ -1002,7 +993,7 @@ namespace TwitchLeecher.Services.Services
             Uri url = new Uri("https://www.twitch.tv/videos/" + id);
             Uri thumbnail = new Uri(videoJson.SelectToken("video.thumbnailURLs[0]").Value<string>());
             Uri gameThumbnail = videoJson.SelectToken("video.game.boxArtURL") == null ? new Uri(UNKNOWN_GAME_URL) : new Uri(videoJson.SelectToken("video.game.boxArtURL").Value<string>());
-            bool subOnly = IsVideoSubOnly(id);
+            bool subOnly = IsVideoSubOnly(videoJson.SelectToken("video.playbackAccessToken.value").Value<string>());
 
             string playlistBase = videoJson.SelectToken("video.animatedPreviewURL").Value<string>();
             playlistBase = playlistBase.Substring(0, playlistBase.LastIndexOf("/storyboards/"));
