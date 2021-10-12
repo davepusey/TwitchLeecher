@@ -284,61 +284,7 @@ namespace TwitchLeecher.Services.Services
                 throw new ArgumentNullException(nameof(channel));
             }
 
-            using (WebClient webClient = CreatePublicApiWebClient())
-            {
-                webClient.QueryString.Add("login", channel);
-
-                string result = null;
-
-                try
-                {
-                    result = webClient.DownloadString(USERS_URL);
-                }
-                catch (WebException)
-                {
-                    return null;
-                }
-
-                if (!string.IsNullOrWhiteSpace(result))
-                {
-                    JObject searchResultJson = JObject.Parse(result);
-
-                    JArray usersJson = searchResultJson.Value<JArray>("users");
-
-                    if (usersJson != null && usersJson.HasValues)
-                    {
-                        JToken userJson = usersJson.FirstOrDefault();
-
-                        if (userJson != null)
-                        {
-                            string id = userJson.Value<string>("_id");
-
-                            if (!string.IsNullOrWhiteSpace(id))
-                            {
-                                using (WebClient webClientChannel = CreatePublicApiWebClient())
-                                {
-                                    try
-                                    {
-                                        webClientChannel.DownloadString(string.Format(CHANNEL_URL, id));
-
-                                        return id;
-                                    }
-                                    catch (WebException)
-                                    {
-                                        return null;
-                                    }
-                                    catch (Exception)
-                                    {
-                                        throw;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                return null;
-            }
+            return TwitchGQL.RunQuery("channel (name: \"" + channel + "\") {id}").SelectToken("channel.id").Value<string>();
         }
 
         public void Search(SearchParameters searchParams)
