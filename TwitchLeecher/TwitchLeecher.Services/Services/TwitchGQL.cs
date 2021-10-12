@@ -2,6 +2,7 @@
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System.Net;
+using System.Text;
 
 namespace TwitchLeecher.Services.Services
 {
@@ -24,6 +25,7 @@ namespace TwitchLeecher.Services.Services
             {
                 gql.Headers.Add(CLIENT_ID_HEADER, CLIENT_ID);
                 gql.Headers.Add(CONTENT_TYPE_HEADER, CONTENT_TYPE);
+                gql.Encoding = Encoding.UTF8;
 
                 return gql;
             }

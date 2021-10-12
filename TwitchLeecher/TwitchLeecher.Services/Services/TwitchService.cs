@@ -317,8 +317,6 @@ namespace TwitchLeecher.Services.Services
                 throw new ArgumentNullException(nameof(channel));
             }
 
-            string channelId = GetChannelIdByName(channel);
-
             ObservableCollection<TwitchVideo> videos = new ObservableCollection<TwitchVideo>();
 
             string broadcastTypeParam;
@@ -340,8 +338,6 @@ namespace TwitchLeecher.Services.Services
                 throw new ApplicationException("Unsupported video type '" + videoType.ToString() + "'");
             }
 
-            string channelVideosUrl = string.Format(CHANNEL_VIDEOS_URL, channelId);
-
             DateTime fromDate = DateTime.Now;
             DateTime toDate = DateTime.Now;
 
@@ -351,71 +347,43 @@ namespace TwitchLeecher.Services.Services
                 toDate = loadTo;
             }
 
-            int offset = 0;
-            int total = 0;
-            int sum = 0;
-
-            bool stop = false;
-
-            do
+            JObject variables = new JObject
             {
-                using (WebClient webClient = CreatePublicApiWebClient())
+                { "channelOwnerLogin", channel },
+                { "broadcastType", broadcastTypeParam.ToUpper() },
+                { "videoSort", "TIME" }
+            };
+
+            List<JObject> videosJson = TwitchGQL.RunPaginatedPersistedQuery("FilterableVideoTower_Videos", variables, "a937f1d22e269e39a03b509f65a7490f9fc247d7f83d6ac1421523e3b68042cb");
+
+            foreach (JObject videoJson in videosJson)
+            {
+                TwitchVideo video = GetTwitchVideoFromId(videoJson.Value<int>("id"));
+
+                if (loadLimit == LoadLimitType.LastVods)
                 {
-                    webClient.QueryString.Add("broadcast_type", broadcastTypeParam);
-                    webClient.QueryString.Add("limit", TWITCH_MAX_LOAD_LIMIT.ToString());
-                    webClient.QueryString.Add("offset", offset.ToString());
+                    videos.Add(video);
 
-                    string result = webClient.DownloadString(channelVideosUrl);
-
-                    JObject videosResponseJson = JObject.Parse(result);
-
-                    if (videosResponseJson != null)
+                    if (videos.Count >= loadLastVods)
                     {
-                        if (total == 0)
-                        {
-                            total = videosResponseJson.Value<int>("_total");
-                        }
-
-                        foreach (JObject videoJson in videosResponseJson.Value<JArray>("videos"))
-                        {
-                            sum++;
-
-                            if (videoJson.Value<string>("_id").StartsWith("v"))
-                            {
-                                TwitchVideo video = ParseVideo(videoJson);
-
-                                if (loadLimit == LoadLimitType.LastVods)
-                                {
-                                    videos.Add(video);
-
-                                    if (sum >= loadLastVods)
-                                    {
-                                        stop = true;
-                                        break;
-                                    }
-                                }
-                                else
-                                {
-                                    DateTime recordedDate = video.RecordedDate;
-
-                                    if (recordedDate.Date >= fromDate.Date && recordedDate.Date <= toDate.Date)
-                                    {
-                                        videos.Add(video);
-                                    }
-
-                                    if (recordedDate.Date < fromDate.Date)
-                                    {
-                                        stop = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        break;
                     }
                 }
+                else
+                {
+                    DateTime recordedDate = video.RecordedDate;
 
-                offset += TWITCH_MAX_LOAD_LIMIT;
-            } while (!stop && sum < total);
+                    if (recordedDate.Date >= fromDate.Date && recordedDate.Date <= toDate.Date)
+                    {
+                        videos.Add(video);
+                    }
+
+                    if (recordedDate.Date < fromDate.Date)
+                    {
+                        break;
+                    }
+                }
+            }
 
             Videos = videos;
         }
@@ -535,33 +503,41 @@ namespace TwitchLeecher.Services.Services
 
         private TwitchVideo GetTwitchVideoFromId(int id)
         {
-            using (WebClient webClient = CreatePublicApiWebClient())
+            string query = "video(id:" + id + ") {" +
+                            "owner{displayName}, title, id, " +
+                            "game{name,boxArtURL(width:136,height:190)}, " +
+                            "viewCount, lengthSeconds, " +
+                            "thumbnailURLs(width:640,height:360), " +
+                            "publishedAt, createdAt, animatedPreviewURL, broadcastType}";
+
+            JObject videoJson = TwitchGQL.RunQuery(query);
+
+            if (videoJson != null)
             {
-                try
-                {
-                    string result = webClient.DownloadString(string.Format(VIDEO_URL, id));
-
-                    JObject videoJson = JObject.Parse(result);
-
-                    if (videoJson != null)
-                    {
-                        return ParseVideo(videoJson);
-                    }
-                }
-                catch (WebException ex)
-                {
-                    if (ex.Response is HttpWebResponse resp && resp.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        return null;
-                    }
-                    else
-                    {
-                        throw;
-                    }
-                }
+                return ParseVideo(videoJson);
             }
+            else
+            {
+                return null;
+            }
+        }
 
-            return null;
+        private bool IsVideoSubOnly(int id)
+        {
+            JObject variables = new JObject
+            {
+                { "isLive", false },
+                { "login", "" },
+                { "isVod", true },
+                { "vodID", id.ToString() },
+                { "playerType", "" }
+            };
+
+            JObject patJson = TwitchGQL.RunPersistedQuery("PlaybackAccessToken", variables, "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712");
+            JObject tokenJson = JObject.Parse(patJson.SelectToken("data.videoPlaybackAccessToken.value").Value<string>());
+            JArray bitratesJson = tokenJson.SelectToken("chansub.restricted_bitrates").Value<JArray>();
+
+            return bitratesJson.Count > 0;
         }
 
         public void Enqueue(DownloadParameters downloadParams)
@@ -648,7 +624,7 @@ namespace TwitchLeecher.Services.Services
 
                             cancellationToken.ThrowIfCancellationRequested();
 
-                            string playlistUrl = RetrievePlaylistUrlForQuality(log, quality, vodId, vodAuthInfo);
+                            string playlistUrl = RetrievePlaylistUrlForQuality(log, quality, downloadParams.Video);
 
                             cancellationToken.ThrowIfCancellationRequested();
 
@@ -776,47 +752,15 @@ namespace TwitchLeecher.Services.Services
             }
         }
 
-        private string RetrievePlaylistUrlForQuality(Action<string> log, TwitchVideoQuality quality, string vodId, VodAuthInfo vodAuthInfo)
+        private string RetrievePlaylistUrlForQuality(Action<string> log, TwitchVideoQuality quality, TwitchVideo video)
         {
-            using (WebClient webClient = CreatePrivateApiWebClient())
-            {
-                webClient.Headers.Add("Accept", "*/*");
-                webClient.Headers.Add("Accept-Encoding", "gzip, deflate, br");
+            log(Environment.NewLine + Environment.NewLine + "Retrieving m3u8 playlist url for selected quality " + quality.DisplayString);
 
-                log(Environment.NewLine + Environment.NewLine + "Determining m3u8 playlist url for selected quality " + quality.DisplayString);
+            string playlistUrl = video.GetPlaylistUrlForQuality(quality);
 
-                string playlistUrl = DeterminePlaylistUrl(vodId, quality.QualityId);
+            log(Environment.NewLine + Environment.NewLine + "Playlist url for selected quality " + quality.DisplayString + " is " + playlistUrl);
 
-                log(Environment.NewLine + Environment.NewLine + "Playlist url for selected quality " + quality.DisplayString + " is " + playlistUrl);
-
-                return playlistUrl;
-            }
-        }
-
-        private string DeterminePlaylistUrl(string vodId, string qualityId)
-        {
-            using (WebClient wc = new WebClient())
-            {
-                wc.Headers.Add(TWITCH_V5_ACCEPT_HEADER, TWITCH_V5_ACCEPT);
-                wc.Headers.Add(TWITCH_CLIENT_ID_HEADER, TWITCH_CLIENT_ID);
-
-                JObject vodMetadata = JObject.Parse(wc.DownloadString(string.Format(VIDEO_URL, vodId)));
-                string vodType = vodMetadata.Value<string>("broadcast_type");
-
-                string playlistUrl = vodMetadata.Value<string>("animated_preview_url");
-                playlistUrl = playlistUrl.Substring(0, playlistUrl.LastIndexOf("/storyboards/"));
-
-                if (vodType == "highlight")
-                {
-                    playlistUrl += "/" + qualityId + "/highlight-" + vodId + ".m3u8";
-                }
-                else
-                {
-                    playlistUrl += "/" + qualityId + "/index-dvr.m3u8";
-                }
-
-                return playlistUrl;
-            }
+            return playlistUrl;
         }
 
         private VodPlaylist RetrieveVodPlaylist(Action<string> log, string tempDir, string playlistUrl)
@@ -1048,33 +992,31 @@ namespace TwitchLeecher.Services.Services
 
         public TwitchVideo ParseVideo(JObject videoJson)
         {
-            string channel = videoJson.Value<JObject>("channel").Value<string>("display_name");
-            string title = videoJson.Value<string>("title");
-            string id = videoJson.Value<string>("_id");
-            string game = videoJson.Value<string>("game");
-            int views = videoJson.Value<int>("views");
-            TimeSpan length = new TimeSpan(0, 0, videoJson.Value<int>("length"));
-            List<TwitchVideoQuality> qualities = ParseQualities(videoJson.Value<JObject>("resolutions"), videoJson.Value<JObject>("fps"));
-            Uri url = new Uri(videoJson.Value<string>("url"));
-            Uri thumbnail = new Uri(videoJson.Value<JObject>("preview").Value<string>("large"));
-            Uri gameThumbnail = GetGameThumbnail(game);
-            bool subOnly = RetrieveVodAuthInfo(id).SubOnly;
+            string channel = videoJson.SelectToken("video.owner.displayName").Value<string>();
+            string title = videoJson.SelectToken("video.title").Value<string>();
+            int id = videoJson.SelectToken("video.id").Value<int>();
+            string broadcastType = videoJson.SelectToken("video.broadcastType").Value<string>();
+            string game = videoJson.SelectToken("video.game.name")?.Value<string>();
+            int views = videoJson.SelectToken("video.viewCount").Value<int>();
+            TimeSpan length = new TimeSpan(0, 0, videoJson.SelectToken("video.lengthSeconds").Value<int>());
+            Uri url = new Uri("https://www.twitch.tv/videos/" + id);
+            Uri thumbnail = new Uri(videoJson.SelectToken("video.thumbnailURLs[0]").Value<string>());
+            Uri gameThumbnail = videoJson.SelectToken("video.game.boxArtURL") == null ? new Uri(UNKNOWN_GAME_URL) : new Uri(videoJson.SelectToken("video.game.boxArtURL").Value<string>());
+            bool subOnly = IsVideoSubOnly(id);
 
-            string dateStr = videoJson.Value<string>("published_at");
+            string playlistBase = videoJson.SelectToken("video.animatedPreviewURL").Value<string>();
+            playlistBase = playlistBase.Substring(0, playlistBase.LastIndexOf("/storyboards/"));
+
+            string dateStr = videoJson.SelectToken("video.publishedAt").Value<string>();
 
             if (string.IsNullOrWhiteSpace(dateStr))
             {
-                dateStr = videoJson.Value<string>("created_at");
+                dateStr = videoJson.SelectToken("video.createdAt").Value<string>();
             }
 
             DateTime recordedDate = DateTime.Parse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
-            if (id.StartsWith("v", StringComparison.OrdinalIgnoreCase))
-            {
-                id = id.Substring(1);
-            }
-
-            return new TwitchVideo(channel, title, id, game, views, length, qualities, recordedDate, thumbnail, gameThumbnail, url, subOnly);
+            return new TwitchVideo(channel, title, id.ToString(), broadcastType, playlistBase, game, views, length, recordedDate, thumbnail, gameThumbnail, url, subOnly);
         }
 
         public Uri GetGameThumbnail(string game)
@@ -1154,47 +1096,6 @@ namespace TwitchLeecher.Services.Services
             {
                 // Thumbnail loading should not affect the rest of the application
             }
-        }
-
-        public List<TwitchVideoQuality> ParseQualities(JObject resolutionsJson, JObject fpsJson)
-        {
-            List<TwitchVideoQuality> qualities = new List<TwitchVideoQuality>();
-
-            Dictionary<string, string> fpsList = new Dictionary<string, string>();
-
-            if (fpsJson != null)
-            {
-                foreach (JProperty fps in fpsJson.Values<JProperty>())
-                {
-                    fpsList.Add(fps.Name, ((int)Math.Round(fps.Value.Value<double>(), 0)).ToString());
-                }
-            }
-
-            if (resolutionsJson != null)
-            {
-                foreach (JProperty resolution in resolutionsJson.Values<JProperty>())
-                {
-                    string value = resolution.Value.Value<string>();
-                    string qualityId = resolution.Name;
-                    string fps = fpsList.ContainsKey(qualityId) ? fpsList[qualityId] : null;
-
-                    qualities.Add(new TwitchVideoQuality(qualityId, value, fps));
-                }
-            }
-
-            if (fpsList.ContainsKey(TwitchVideoQuality.QUALITY_AUDIO))
-            {
-                qualities.Add(new TwitchVideoQuality(TwitchVideoQuality.QUALITY_AUDIO));
-            }
-
-            if (!qualities.Any())
-            {
-                qualities.Add(new TwitchVideoQuality(TwitchVideoQuality.QUALITY_SOURCE));
-            }
-
-            qualities.Sort();
-
-            return qualities;
         }
 
         public void Pause()
