@@ -36,6 +36,7 @@ namespace TwitchLeecher.Services.Services
         private const string ACCESS_TOKEN_URL = "https://gql.twitch.tv/gql";
         private const string ALL_PLAYLISTS_URL = "https://usher.ttvnw.net/vod/{0}.m3u8?nauthsig={1}&nauth={2}&allow_source=true&player=twitchweb&allow_spectre=true&allow_audio_only=true";
         private const string UNKNOWN_GAME_URL = "https://static-cdn.jtvnw.net/ttv-boxart/404_boxart.png";
+        private const string NO_VIDEO_THUMBNAIL_URL = "https://vod-secure.twitch.tv/_404/404_processing_320x180.png";
 
         private const string TEMP_PREFIX = "TL_";
 
@@ -991,7 +992,10 @@ namespace TwitchLeecher.Services.Services
             int views = videoJson.SelectToken("video.viewCount").Value<int>();
             TimeSpan length = new TimeSpan(0, 0, videoJson.SelectToken("video.lengthSeconds").Value<int>());
             Uri url = new Uri("https://www.twitch.tv/videos/" + id);
-            Uri thumbnail = new Uri(videoJson.SelectToken("video.thumbnailURLs[0]").Value<string>());
+
+            JToken thumbnailUrl = videoJson.SelectToken("video.thumbnailURLs[0]");
+            Uri thumbnail = thumbnailUrl == null ? new Uri(NO_VIDEO_THUMBNAIL_URL) : new Uri(thumbnailUrl.Value<string>());
+
             Uri gameThumbnail = videoJson.SelectToken("video.game.boxArtURL") == null ? new Uri(UNKNOWN_GAME_URL) : new Uri(videoJson.SelectToken("video.game.boxArtURL").Value<string>());
             bool subOnly = IsVideoSubOnly(videoJson.SelectToken("video.playbackAccessToken.value").Value<string>());
 
